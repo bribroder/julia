@@ -309,9 +309,22 @@ function maybe_make_invoke!(ir::IRCode, idx::Int, @nospecialize(etype), atypes::
                     @nospecialize(atype_unlimited), isinvoke::Bool, isapply::Bool, @nospecialize(invoke_data))
     nu = countunionsplit(atypes)
     nu > 1 && return # TODO: The old optimizer did union splitting here. Is this the right place?
-    ex = Expr(:invoke)
     linfo = spec_lambda(atype_unlimited, sv, invoke_data)
-    linfo === nothing && return
+    if linfo === nothing
+        # We might not have an linfo, but we can still rewrite the _apply into a regular call
+        # based on our analysis
+        if isapply
+            ex = Expr(:call)
+            argexprs = ir[SSAValue(idx)].args
+            argexprs = rewrite_exprargs((node, typ)->insert_node!(ir, idx, typ, node), arg->exprtype(arg, ir, ir.mod),
+                isinvoke, isapply, argexprs)
+            ex.typ = etype
+            ex.args = argexprs
+            ir[SSAValue(idx)] = ex
+        end
+        return
+    end
+    ex = Expr(:invoke)
     add_backedge!(linfo, sv)
     argexprs = ir[SSAValue(idx)].args
     argexprs = rewrite_exprargs((node, typ)->insert_node!(ir, idx, typ, node), arg->exprtype(arg, ir, ir.mod),
@@ -465,7 +478,6 @@ function assemble_inline_todo!(ir::IRCode, linetable::Vector{LineInfoNode}, sv::
                                     atype_unlimited, method.sig)::SimpleVector
             methsp = methsp::SimpleVector
         end
-
 
         methsig = method.sig
         if !(atype <: metharg)
